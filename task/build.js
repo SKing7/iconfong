@@ -6,10 +6,21 @@ module.exports = function(grunt) {
     var path      = require('path');
     var _         = require('lodash');
     var domparser = require('xmldom').DOMParser;
-    var dir = require('node-dir');
-    var ArgumentParser = require('argparse').ArgumentParser;
     var SvgPath   = require('svgpath');
     var child_process = require('child_process');
+    var colors = require('colors');
+    colors.setTheme({
+      silly: 'rainbow',
+      input: 'grey',
+      verbose: 'cyan',
+      prompt: 'grey',
+      info: 'green',
+      data: 'grey',
+      help: 'cyan',
+      warn: 'yellow',
+      debug: 'blue',
+      error: 'red'
+    });
 
     grunt.registerTask('build', 'build Icon font', function() {
         var done = this.async();
@@ -103,19 +114,41 @@ module.exports = function(grunt) {
         var svgs = [];
 
         // Counter
-        var internalCode = 0xF000;
+        var internalCode = 0xE900;
         ////////////////////////////////////////////////////////////////////////////////
 
         //
         // Scan sources
         //
         var args = {input_fonts: './src/svg/', output: 'build/icon.svg'};
+        var json_data_file = 'build/icon_codepoint_map.json';
+        if (!fs.existsSync(json_data_file)) { 
+            fs.writeFileSync(json_data_file, '{}', 'utf8');
+        }
+        
+        var icon_codepoint_map = {};
+        var data_json = JSON.parse(fs.readFileSync(json_data_file));
+        var data_json_backup = _.clone(data_json, true);
+        var max = 0;
+        _.each(data_json, function (nd) {
+            if (nd.slice(2, -1) > max) {
+                max = nd.slice(2, -1);
+            }
+        });
+        internalCode = Math.max(max, internalCode);
+        if (internalCode > 0xF8FF) {
+            internalCode = 0xF0000;
+        }
+        if (internalCode > 0x10FFFF) {
+            console.log(('Unicode 区间已用完？？.').error);
+            process.exit();
+        }
         grunt.file.recurse(args.input_fonts, function (abspath, rootdir, subdir, file_name) { 
                 var glyph_data = {};
-                glyph_data.charRef = internalCode;
-                internalCode++;
-                glyph_data.css = file_name;
+                var name = file_name.slice(0, -4);
+                glyph_data.css = name;
                 glyph_data.svg = {};
+                glyph_data.charRef = '';
                 var svg = parseSvgImage(fs.readFileSync(abspath, 'utf8'), file_name);
                 var scale = 1000 / svg.height;
                 glyph_data.svg.width = +(svg.width * scale).toFixed(1);
@@ -123,9 +156,36 @@ module.exports = function(grunt) {
                                         .scale(scale)
                                         .abs().round(1).rel()
                                         .toString();
+                if (icon_codepoint_map[name]) {
+                    console.log(('>> Error:存在重名svg文件(' + file_name + ')').error);
+                    console.log(('Aborted due to errors.').error);
+                    process.exit();
+                } else {
+                    if (!data_json[name]) {
+                        internalCode++;
+                        data_json_backup[name] = '&#' + internalCode + ';'; 
+                        glyph_data.charRef = internalCode;
+                    } else {
+                        glyph_data.charRef = data_json[name].slice(2, -1);
+                    }
+                    icon_codepoint_map[name] = '1';
+                }
                 svgs.push(_.clone(glyph_data, true));
             }
         );
+        _.each(data_json_backup, function (item, key) {
+            if(!icon_codepoint_map[key]) {
+                delete data_json_backup[key];
+            }
+        });
+        fs.writeFile(json_data_file, JSON.stringify(data_json_backup, null, 4), function(err) {
+            if(err) {
+              console.log(err.error.error);
+            } else {
+              console.log("JSON saved".info);
+              console.log(data_json_backup);
+            }
+        }); 
         var font = {
             fontname: 'w3iconfont',
             familyname: 'w3iconfont',
@@ -144,7 +204,7 @@ module.exports = function(grunt) {
                               .abs().round(0).rel()
                               .toString(),
                 css   : glyph.css,
-                unicode : '&#x' + glyph.charRef.toString(16) + ';'
+                unicode : '&#' + glyph.charRef + ';'
             });
         });
 
@@ -155,13 +215,12 @@ module.exports = function(grunt) {
             fontHeight : font.ascent - font.descent
         });
         fs.writeFileSync(args.output, svgOut, 'utf8');
-        console.log('svg2ttf begin');
         child_process.exec('./node_modules/.bin/svg2ttf build/icon.svg build/icon.ttf', function () {
-                console.log('ttf complete');
+                console.log('ttf complete'.info);
                 child_process.exec('./node_modules/.bin/ttf2woff build/icon.ttf build/icon.woff', function () {
-                    console.log('woff complete'); 
+                    console.log('woff complete'.info); 
                     child_process.exec('./node_modules/.bin/ttf2eot build/icon.ttf build/icon.eot', function () {
-                        console.log('eot complete');
+                        console.log('eot complete'.info);
                         done(true);
                     }); 
                 }); 
