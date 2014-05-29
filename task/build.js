@@ -9,6 +9,8 @@ module.exports = function(grunt) {
     var SvgPath   = require('svgpath');
     var child_process = require('child_process');
     var colors = require('colors');
+    var crypto = require('crypto');
+    var md5 = require('MD5');
     colors.setTheme({
       silly: 'rainbow',
       input: 'grey',
@@ -131,49 +133,60 @@ module.exports = function(grunt) {
         var data_json_backup = _.clone(data_json, true);
         var max = 0;
         _.each(data_json, function (nd) {
-            if (nd.slice(2, -1) > max) {
-                max = nd.slice(2, -1);
+            if (nd.code.slice(2, -1) > max) {
+                max = nd.code.slice(2, -1);
             }
         });
-        internalCode = Math.max(max, internalCode);
-        if (internalCode > 0xF8FF) {
-            internalCode = 0xF0000;
-        }
-        if (internalCode > 0x10FFFF) {
-            console.log(('Unicode 区间已用完？？.').error);
-            process.exit();
+        internalCode = getCode(Math.max(max, internalCode));
+        function getCode(internalCode) {
+            if (internalCode > 0xF8FF) {
+                internalCode = 0xF0000;
+            }
+            if (internalCode > 0x10FFFF) {
+                console.log(('Unicode 区间已用完？？.').error);
+                process.exit();
+            }
+            return internalCode;
         }
         grunt.file.recurse(args.input_fonts, function (abspath, rootdir, subdir, file_name) { 
                 var glyph_data = {};
-                var name = file_name.slice(0, -4);
+                var file_data = fs.readFileSync(abspath, 'utf8');
+                var name = md5(file_data);
                 glyph_data.css = name;
                 glyph_data.svg = {};
                 glyph_data.charRef = '';
-                var svg = parseSvgImage(fs.readFileSync(abspath, 'utf8'), file_name);
+                var svg = parseSvgImage(file_data, file_name);
                 var scale = 1000 / svg.height;
                 glyph_data.svg.width = +(svg.width * scale).toFixed(1);
                 glyph_data.svg.d = new SvgPath(svg.d)
                                         .scale(scale)
                                         .abs().round(1).rel()
                                         .toString();
+
                 if (icon_codepoint_map[name]) {
                     console.log(('>> Error:存在重名svg文件(' + file_name + ')').error);
                     console.log(('Aborted due to errors.').error);
                     process.exit();
                 } else {
                     if (!data_json[name]) {
-                        internalCode++;
-                        data_json_backup[name] = '&#' + internalCode + ';'; 
+                        internalCode = getCode(++internalCode);
+                        data_json_backup[name] = {}; 
+                        data_json_backup[name]['code'] = '&#' + internalCode + ';'; 
+                        data_json_backup[name]['file_name'] = file_name; 
                         glyph_data.charRef = internalCode;
                     } else {
-                        glyph_data.charRef = data_json[name].slice(2, -1);
+                        glyph_data.charRef = data_json[name]['code'].slice(2, -1);
+                        //可能会有重命名情况
+                        data_json_backup[name]['file_name'] = file_name; 
                     }
                     icon_codepoint_map[name] = '1';
                 }
                 svgs.push(_.clone(glyph_data, true));
             }
         );
+        //data_json_backup 之前和现在的文件并集列表
         _.each(data_json_backup, function (item, key) {
+            //icon_codepoint_map 保存最新的文件列表
             if(!icon_codepoint_map[key]) {
                 delete data_json_backup[key];
             }
@@ -187,8 +200,8 @@ module.exports = function(grunt) {
             }
         }); 
         var font = {
-            fontname: 'w3iconfont',
-            familyname: 'w3iconfont',
+            fontname: 'iconfont',
+            familyname: 'iconfont',
             ascent: 850,
             descent: -150
         };
